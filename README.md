@@ -13,7 +13,6 @@
 * 🔄 **Pembaruan OTA Otomatis:** Menangani proses unduh dan penerapan pembaruan melalui skrip utama (`00_OTAUpdater.py`).
 * 🔐 **Verifikasi Integritas (SHA-256):** Memastikan file paket pembaruan aman dan tidak rusak menggunakan generator hash (`MakeSHA256.py`).
 * 📦 **Pengemasan Paket Otomatis:** Dilengkapi skrip PowerShell (`MakeAmain.zip.ps`) untuk membuat arsip paket pembaruan.
-* 🧩 **Orkestrasi Patch:** Mengatur alur penerapan *patch* secara sistematis melalui `_patchOrchestra_.py`.
 * 💾 **Backup & Logging:** Mencadangkan file penting sebelum pembaruan di folder `backup/` dan mencatat seluruh aktivitas di `ota.log`.
 * ⚙️ **Konfigurasi Fleksibel:** Pengaturan parameter OTA dipisahkan secara rapi di dalam file `ota.conf`.
 
@@ -34,7 +33,6 @@ OTAUpdater-main/
 │       └── ota.log             # File log untuk mencatat riwayat dan error pembaruan
 ├── MakeAmain.zip.ps            # Skrip PowerShell untuk mengemas file update menjadi arsip ZIP
 ├── MakeSHA256.py               # Skrip Python untuk menghasilkan checksum SHA-256 paket update
-├── _patchOrchestra_.py         # Skrip pengatur (orchestrator) proses penerapan patch
 └── README.md                   # Dokumentasi proyek
 ```
 
@@ -93,8 +91,6 @@ Jalankan skrip utama updater dari direktori proyek:
 ```bash
 python Dapur/00_OTAUpdater.py
 ```
-
-> **Catatan:** Jika ada proses *patching* lanjutan, modul `_patchOrchestra_.py` akan berperan mengatur tahapan eksekusi patch sesuai alur yang dikonfigurasi.
 
 ---
 
