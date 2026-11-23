@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import shutil
+import signal
 import hashlib
 import zipfile
 import logging
@@ -36,7 +37,6 @@ if not logger.handlers:
 
 
 class CLISpinner:
-
     def __init__(self, message="Memeriksa status sistem"):
         self.message = message
         self.running = False
@@ -127,7 +127,7 @@ def fetch_remote_hash(hash_url, timeout=20):
     req = urllib.request.Request(
         hash_url,
         headers={
-            "User-Agent": "Enterprise-OTA-Updater/2.0",
+            "User-Agent": "Enterprise-OTA-Updater/2.1",
             "Cache-Control": "no-cache, no-store, must-revalidate",
             "Pragma": "no-cache",
         },
@@ -143,7 +143,7 @@ def download_file_with_timeout(url, dest_path, timeout=20):
     req = urllib.request.Request(
         url,
         headers={
-            "User-Agent": "Enterprise-OTA-Updater/2.0",
+            "User-Agent": "Enterprise-OTA-Updater/2.1",
             "Cache-Control": "no-cache, no-store, must-revalidate",
             "Pragma": "no-cache",
         },
@@ -341,17 +341,14 @@ def locate_staging_content(staging_dir):
 
 
 def get_target_orchestrator_name(conf):
-    if len(sys.argv) > 1 and sys.argv[1].lower().endswith(".py"):
-        return os.path.basename(sys.argv[1])
-
     cfg_orch = conf.get("orchestrator", "").strip()
     if cfg_orch and os.path.exists(os.path.join(PROJECT_ROOT, cfg_orch)):
         return cfg_orch
 
-    py_candidates = [
+    py_candidates = sorted(
         f for f in os.listdir(PROJECT_ROOT)
         if f.lower().endswith(".py") and not f.startswith("__")
-    ]
+    )
     if py_candidates:
         return py_candidates[0]
 
@@ -442,20 +439,42 @@ def apply_update(staging_dir, current_conf):
                 rel_deleted = os.path.relpath(target, PROJECT_ROOT).replace("\\", "/")
                 logger.info(f"[DELETE] Berkas usang dihapus: {rel_deleted}")
 
-    orch_hash_after = calculate_sha256(orch_local_path)
+    updated_orch_name = get_target_orchestrator_name(current_conf)
+    updated_orch_path = os.path.join(PROJECT_ROOT, updated_orch_name) if updated_orch_name else None
+    orch_hash_after = calculate_sha256(updated_orch_path)
+
     orchestrator_changed = (
-        orch_hash_before is not None
-        and orch_hash_after is not None
-        and orch_hash_before != orch_hash_after
+        (target_orch_name != updated_orch_name)
+        or (
+            orch_hash_before is not None
+            and orch_hash_after is not None
+            and orch_hash_before != orch_hash_after
+        )
     )
 
-    return current_conf, orchestrator_changed, target_orch_name
+    return current_conf, orchestrator_changed, updated_orch_name
+
+
+def terminate_old_orchestrator(pid):
+    try:
+        os.kill(pid, signal.SIGTERM)
+        logger.info(f"Orkestrator lama (PID {pid}) berhasil dihentikan.")
+    except Exception:
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/PID", str(pid)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+            logger.info(f"Orkestrator lama (PID {pid}) dihentikan via taskkill.")
+        except Exception as e:
+            logger.warning(f"Gagal menghentikan PID {pid}: {e}")
 
 
 def run_ota():
     if os.environ.get("OTA_ALREADY_CHECKED") == "1":
-        os.environ.pop("OTA_ALREADY_CHECKED", None)
-        logger.info("Sesi baru hasil restart Orchestrator terdeteksi. Melanjutkan proses normal.")
+        logger.info("OTA sudah diperiksa pada sesi ini. Melanjutkan ke modul berikutnya.")
         return
 
     conf = load_ota_conf(OTA_CONF_PATH)
@@ -475,7 +494,7 @@ def run_ota():
     temp_dir = tempfile.mkdtemp(prefix="ota_sync_")
     temp_zip = os.path.join(temp_dir, "release_incoming.zip")
     orchestrator_changed = False
-    target_orchestrator = "Perbarui Data AR.py"
+    target_orchestrator = get_target_orchestrator_name(conf)
 
     try:
         local_hash = calculate_sha256(LOCAL_ZIP_PATH)
@@ -484,7 +503,7 @@ def run_ota():
             try:
                 remote_hash = fetch_remote_hash(hash_url, timeout=timeout)
                 if remote_hash and local_hash and remote_hash == local_hash:
-                    spinner.stop("[✓] Sistem sudah versi terbaru (Hash identik).")
+                    spinner.stop("[OK] Sistem sudah versi terbaru (Hash identik).")
                     logger.info(f"Sistem mutakhir. Hash lokal & remote sama ({local_hash[:12]}).")
                     return
             except Exception as h_err:
@@ -495,7 +514,7 @@ def run_ota():
         new_hash = calculate_sha256(temp_zip)
 
         if local_hash and new_hash == local_hash:
-            spinner.stop("[✓] Sistem sudah menggunakan versi terbaru.")
+            spinner.stop("[OK] Sistem sudah menggunakan versi terbaru.")
             logger.info(f"Sistem mutakhir. Hash main.zip cocok ({new_hash[:12]}).")
             return
 
@@ -513,10 +532,10 @@ def run_ota():
         shutil.copy2(temp_zip, LOCAL_ZIP_PATH)
         logger.info(f"Pembaruan sukses. Dapur/OTA/main.zip disimpan (SHA256: {new_hash}).")
 
-        spinner.stop("[✓] Pembaruan sistem OTA berhasil diterapkan!")
+        spinner.stop("[OK] Pembaruan sistem OTA berhasil diterapkan!")
 
     except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as net_err:
-        spinner.stop("[!] Server GitHub melewati batas waktu (>20s). Melanjutkan versi saat ini.")
+        spinner.stop(f"[!] Server GitHub melewati batas waktu (>{timeout}s). Melanjutkan versi saat ini.")
         logger.warning(f"Pembaruan OTA dilewati karena kendala jaringan/timeout: {net_err}")
         return
     except Exception as exc:
@@ -531,10 +550,17 @@ def run_ota():
         if os.path.exists(orch_path):
             logger.info(f"Orchestrator '{target_orchestrator}' berubah. Memulai ulang proses...")
             print(f"--> [*] Orchestrator diperbarui. Memulai ulang {target_orchestrator}...\n")
+
             env = os.environ.copy()
             env["OTA_ALREADY_CHECKED"] = "1"
+
+            parent_pid = os.getppid()
+
             subprocess.Popen([sys.executable, orch_path], cwd=PROJECT_ROOT, env=env)
-            sys.exit(42)
+
+            terminate_old_orchestrator(parent_pid)
+
+            sys.exit(0)
 
 
 if __name__ == "__main__":
